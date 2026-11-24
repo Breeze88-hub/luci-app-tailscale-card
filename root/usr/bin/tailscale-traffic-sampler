@@ -1,0 +1,15 @@
+#!/bin/sh
+# tailscale 流量采样：记录 tailscale0 累计计数器，供概览页画 7 天曲线
+CSV=/etc/tailscale/traffic.csv
+IF=/sys/class/net/tailscale0/statistics
+mkdir -p /etc/tailscale
+[ -r "$IF/rx_bytes" ] || exit 0
+NOW=$(date +%s)
+RX=$(cat "$IF/rx_bytes" 2>/dev/null); TX=$(cat "$IF/tx_bytes" 2>/dev/null)
+[ -n "$RX" ] || exit 0
+[ -n "$TX" ] || exit 0
+[ -f "$CSV" ] || echo "ts,rx,tx" > "$CSV"
+echo "$NOW,$RX,$TX" >> "$CSV"
+# 只保留最近 7 天
+CUT=$((NOW - 7*86400))
+awk -F, -v cut="$CUT" 'NR==1 || ($1+0)>=cut' "$CSV" > "$CSV.tmp" 2>/dev/null && mv "$CSV.tmp" "$CSV"

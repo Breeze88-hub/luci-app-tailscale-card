@@ -1,0 +1,4 @@
+#!/bin/sh
+[ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" = "lan" ] || exit 0
+sysctl -w net.ipv6.conf.br-lan.accept_ra=2 >/dev/null 2>&1

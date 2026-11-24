@@ -1,0 +1,252 @@
+<%+header%>
+<%
+local sys    = require "luci.sys"
+local jsonc  = require "luci.jsonc"
+local pcdata = luci.util.pcdata
+
+local function run(cmd) return sys.exec(cmd .. " 2>/dev/null") or "" end
+
+local running = (sys.call("pgrep -f 'tailscaled' >/dev/null") == 0)
+local st = nil
+local ok, parsed = pcall(function() return jsonc.parse(run("tailscale status --json")) end)
+if ok and type(parsed) == "table" then st = parsed end
+
+local self  = st and st.Self
+local state = (st and st.BackendState) or (running and "Unknown" or "Stopped")
+local auth  = run("tailscale status 2>&1 | grep -o 'https://login.tailscale.com/a/[A-Za-z0-9]*' | head -1")
+auth = auth:gsub("%s+$", "")
+
+local function ip4(list)
+	if type(list) ~= "table" then return nil end
+	for _, ip in ipairs(list) do
+		if tostring(ip):match("^%d+%.%d+%.%d+%.%d+$") then return ip end
+	end
+	return list[1]
+end
+
+local myip = ip4(self and self.TailscaleIPs) or ""
+local online, total, relay_self, cur_self = 0, 0, nil, nil
+for _, p in pairs((st and st.Peer) or {}) do
+	if type(p) == "table" then
+		total = total + 1
+		if p.Online then online = online + 1 end
+	end
+end
+
+local n_direct, n_relay = 0, 0
+for _, p in pairs((st and st.Peer) or {}) do
+	if type(p) == "table" and p.Online then
+		if p.CurAddr and p.CurAddr ~= "" then n_direct = n_direct + 1 else n_relay = n_relay + 1 end
+	end
+end
+
+local primary = (self and self.PrimaryRoutes) or {}
+local routes = ""
+if type(primary) == "table" then routes = table.concat(primary, ", ") end
+if routes == "" and self and type(self.AllowedIPs) == "table" then
+	local adv = {}
+	for _, r in ipairs(self.AllowedIPs) do
+		if not tostring(r):match("^100%.") then adv[#adv+1] = r end
+	end
+	routes = table.concat(adv, ", ")
+end
+
+local tx = self and tonumber(self.TxBytes) or 0
+local rx = self and tonumber(self.RxBytes) or 0
+local function human(n)
+	n = tonumber(n) or 0
+	if n > 1073741824 then return string.format("%.2f GB", n / 1073741824) end
+	if n > 1048576 then return string.format("%.1f MB", n / 1048576) end
+	if n > 1024 then return string.format("%.1f KB", n / 1024) end
+	return tostring(n) .. " B"
+end
+
+local state_label, state_class = "未运行", "off"
+if state == "Running" then
+	state_label, state_class = "已连接", "on"
+elseif state == "NeedsLogin" or state == "NeedsMachineAuth" then
+	state_label, state_class = "待登录", "relay"
+elseif state == "Starting" then
+	state_label, state_class = "启动中", "relay"
+end
+
+local base = luci.dispatcher.build_url("admin", "vpn", "tailscale", "action")
+%>
+<link rel="stylesheet" href="/luci-static/resources/tailscale/ui.css">
+<div class="ts-wrap">
+
+  <div class="ts-hero">
+    <h1>Tailscale <span class="ts-badge <%=state_class%>"><%=state_label%></span></h1>
+    <div style="display:flex;gap:8px">
+      <a class="ts-btn" href="<%=luci.dispatcher.build_url("admin","vpn","tailscale","devices")%>">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 5.5h3M11 18.5h2"/></svg>
+        设备
+      </a>
+    </div>
+  </div>
+
+<% if auth ~= "" then %>
+  <div class="ts-card ts-login">
+    <div class="ts-card-head" style="margin-bottom:8px">
+      <span class="ts-card-title">需要登录授权</span>
+      <span class="ts-badge relay">待授权</span>
+    </div>
+    <div class="ts-note">打开下面的链接，在浏览器里完成 Tailscale 账号授权。授权后回到本页刷新即可。</div>
+    <a class="ts-btn ts-primary" style="margin-top:12px" href="<%=pcdata(auth)%>" target="_blank" rel="noopener">打开登录页面</a>
+    <code class="ts-url"><%=pcdata(auth)%></code>
+  </div>
+<% end %>
+
+  <div class="ts-stat-grid" style="margin-bottom:14px">
+    <div class="ts-stat">
+      <div class="k">本机 Tailscale IP</div>
+      <div class="v mono"><% if myip ~= "" then %><%=pcdata(myip)%><% else %>未分配<% end %></div>
+    </div>
+    <div class="ts-stat">
+      <div class="k">在线节点</div>
+      <div class="v"><%=online%> <span style="font-size:14px;color:var(--ts-sub);font-weight:600">/ <%=total%></span></div>
+    </div>
+    <div class="ts-stat">
+      <div class="k">子网路由</div>
+      <div class="v" style="font-size:15px"><% if routes ~= "" then %><%=pcdata(routes)%><% else %>未宣告<% end %></div>
+    </div>
+    <div class="ts-stat">
+      <div class="k">连接方式</div>
+      <div class="v" style="font-size:15px"><%=n_direct%> 直连 / <%=n_relay%> 中继</div>
+    </div>
+  </div>
+
+  <div class="ts-card">
+    <div class="ts-card-head">
+      <span class="ts-card-title">7 天流量</span>
+      <span class="ts-chip" id="ts-tr-total">—</span>
+    </div>
+    <div class="ts-chart" id="ts-chart-box">
+      <svg id="ts-chart" viewBox="0 0 640 150" preserveAspectRatio="none"></svg>
+      <div class="ts-empty" id="ts-chart-empty" style="position:absolute;inset:0;display:none;align-items:center;justify-content:center">正在采集数据…</div>
+    </div>
+    <div class="ts-axis"><span id="ts-ax-from">—</span><span>今天</span></div>
+    <div class="ts-legend">
+      <span><i class="dot rx"></i>下载 <b id="ts-tr-rx">—</b></span>
+      <span><i class="dot tx"></i>上传 <b id="ts-tr-tx">—</b></span>
+      <span id="ts-tr-note" style="opacity:.8"></span>
+    </div>
+  </div>
+
+  <div class="ts-card">
+    <div class="ts-card-head"><span class="ts-card-title">本机信息</span></div>
+    <div class="ts-row"><span class="k">主机名</span><span class="v"><%=pcdata((self and self.HostName) or "-")%></span></div>
+    <div class="ts-row"><span class="k">MagicDNS</span><span class="v"><%=pcdata((self and self.DNSName) or "-")%></span></div>
+    <div class="ts-row"><span class="k">系统</span><span class="v"><%=pcdata((self and self.OS) or "-")%></span></div>
+    <div class="ts-row"><span class="k">版本</span><span class="v"><%=pcdata(tostring((st and st.Version) or "-"))%></span></div>
+    <div class="ts-row"><span class="k">VPN 接口</span><span class="v"><%=pcdata((st and tostring(st.TUN)) == "true" and "TUN 已就绪" or "-")%></span></div>
+  </div>
+
+  <div class="ts-card">
+    <div class="ts-card-head"><span class="ts-card-title">服务操作</span></div>
+    <div class="ts-actions">
+      <a class="ts-btn ts-primary" href="<%=base%>?do=restart">重启服务</a>
+      <a class="ts-btn" href="<%=base%>?do=start">启动</a>
+      <a class="ts-btn" href="<%=base%>?do=stop">停止</a>
+      <a class="ts-btn" href="<%=base%>?do=logout">退出登录</a>
+    </div>
+    <div class="ts-note" style="margin-top:14px">
+      重启服务会重新生成登录链接（约 20 秒）。子网路由与访问权限在「设置」页修改。
+    </div>
+  </div>
+
+  <div class="ts-tabbar"><div class="in">
+    <a class="ts-tab active" href="<%=luci.dispatcher.build_url("admin","vpn","tailscale","status")%>">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
+      概览
+    </a>
+    <a class="ts-tab" href="<%=luci.dispatcher.build_url("admin","vpn","tailscale","devices")%>">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 5.5h3M11 18.5h2"/></svg>
+      设备列表
+    </a>
+    <a class="ts-tab" href="<%=luci.dispatcher.build_url("admin","vpn","tailscale","setting")%>">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M4.9 4.9l1.7 1.7M17.4 17.4l1.7 1.7M2.8 12h2.4M18.8 12h2.4M4.9 19.1l1.7-1.7M17.4 6.6l1.7-1.7"/></svg>
+      设置
+    </a>
+  </div></div>
+
+</div>
+<script>
+(function(){
+  var base = '<%=base%>';
+  function human(n){
+    n = Number(n) || 0;
+    if (n >= 1073741824) return (n/1073741824).toFixed(2) + ' GB';
+    if (n >= 1048576) return (n/1048576).toFixed(1) + ' MB';
+    if (n >= 1024) return (n/1024).toFixed(1) + ' KB';
+    return n + ' B';
+  }
+  function fmtDay(ts){
+    var d = new Date(ts * 1000);
+    return (d.getMonth()+1) + '/' + d.getDate();
+  }
+  function draw(d){
+    var svg = document.getElementById('ts-chart');
+    var box = document.getElementById('ts-chart-box');
+    var empty = document.getElementById('ts-chart-empty');
+    var pts = (d && d.points) || [];
+    document.getElementById('ts-tr-total').textContent = human((d.total_rx||0) + (d.total_tx||0));
+    document.getElementById('ts-tr-rx').textContent = human(d.total_rx);
+    document.getElementById('ts-tr-tx').textContent = human(d.total_tx);
+
+    if (pts.length < 2) {
+      empty.style.display = 'flex';
+      empty.textContent = '采样中（每 5 分钟一个点），已记录 ' + ((d && d.samples) || 0) + ' 个采样';
+      document.getElementById('ts-tr-note').textContent = '';
+      document.getElementById('ts-ax-from').textContent = '—';
+      return;
+    }
+    empty.style.display = 'none';
+
+    var W = 640, H = 150, PADT = 10, PADB = 6;
+    var now = Math.floor(Date.now()/1000);
+    var from = now - 7*86400;
+    var t0 = Math.max(from, pts[0].t);
+    var max = 1;
+    pts.forEach(function(p){ max = Math.max(max, p.rx, p.tx); });
+    var span = Math.max(3600, now - t0);
+    function X(t){ return ((t - t0) / span) * W; }
+    function Y(v){ return PADT + (1 - v / max) * (H - PADT - PADB); }
+
+    function line(key){
+      var d1 = '';
+      pts.forEach(function(p, i){
+        d1 += (i ? 'L' : 'M') + X(p.t).toFixed(1) + ' ' + Y(p[key]).toFixed(1) + ' ';
+      });
+      return d1;
+    }
+    function area(key){
+      return line(key) + 'L' + X(pts[pts.length-1].t).toFixed(1) + ' ' + (H-PADB) + ' L' + X(pts[0].t).toFixed(1) + ' ' + (H-PADB) + ' Z';
+    }
+
+    var g = '';
+    for (var i = 1; i <= 3; i++) {
+      var y = PADT + (H - PADT - PADB) * i / 4;
+      g += '<line x1="0" y1="'+y.toFixed(1)+'" x2="'+W+'" y2="'+y.toFixed(1)+'" stroke="#e9ebef" stroke-width="1"/>';
+    }
+    svg.innerHTML =
+      '<defs>' +
+        '<linearGradient id="gRx" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a5fd0" stop-opacity=".28"/><stop offset="100%" stop-color="#1a5fd0" stop-opacity="0"/></linearGradient>' +
+        '<linearGradient id="gTx" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#e8833a" stop-opacity=".24"/><stop offset="100%" stop-color="#e8833a" stop-opacity="0"/></linearGradient>' +
+      '</defs>' + g +
+      '<path d="' + area('rx') + '" fill="url(#gRx)"/>' +
+      '<path d="' + area('tx') + '" fill="url(#gTx)"/>' +
+      '<path d="' + line('rx') + '" fill="none" stroke="#1a5fd0" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>' +
+      '<path d="' + line('tx') + '" fill="none" stroke="#e8833a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+
+    document.getElementById('ts-ax-from').textContent = fmtDay(t0);
+    document.getElementById('ts-tr-note').textContent = '峰值 ' + human(max) + '/h';
+    box.style.cursor = 'default';
+  }
+  fetch('<%=luci.dispatcher.build_url("admin","vpn","tailscale","traffic")%>', {credentials:'same-origin'})
+    .then(function(r){ return r.json(); })
+    .then(draw)
+    .catch(function(){ document.getElementById('ts-tr-note').textContent = '数据读取失败'; });
+})();
+</script>
+<%+footer%>
