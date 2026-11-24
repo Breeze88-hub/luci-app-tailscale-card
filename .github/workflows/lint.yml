@@ -1,0 +1,34 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lua:
+    name: Lua syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua 5.1
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1
+      - name: luac -p
+        run: |
+          set -e
+          find luasrc -name '*.lua' -print0 | xargs -0 -r -n1 luac5.1 -p
+          echo "all .lua files parsed OK"
+
+  shell:
+    name: Shell syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: sh -n
+        run: |
+          set -e
+          for f in install.sh push-to-github.sh root/usr/bin/tailscale-traffic-sampler root/etc/hotplug.d/iface/95-lan-ipv6-ra; do
+            [ -f "$f" ] || continue
+            sh -n "$f" && echo "OK  $f"
+          done

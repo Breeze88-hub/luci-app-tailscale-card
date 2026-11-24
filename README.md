@@ -1,20 +1,29 @@
 # luci-app-tailscale-card
 
-Tailscale 的 LuCI 管理界面（卡片式 UI），适用于 **Lua LuCI**（OpenWrt 21.02 / 22.03 / 23.05 / 24.10 的 lua 版主题，如 argon、bootstrap、material）。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![OpenWrt](https://img.shields.io/badge/OpenWrt-21.02%20%7C%2022.03%20%7C%2023.05%20%7C%2024.10-00A7E1)](https://openwrt.org)
+[![LuCI](https://img.shields.io/badge/LuCI-Lua%20%C2%B7%20luci--compat-brightgreen)](https://github.com/openwrt/luci)
+[![Lua lint](https://github.com/Breeze88-hub/luci-app-tailscale-card/actions/workflows/lint.yml/badge.svg)](https://github.com/Breeze88-hub/luci-app-tailscale-card/actions/workflows/lint.yml)
 
-官方 `tailscale` 包只带命令行，社区常见的 `luci-app-tailscale` 是给新版 ucode/JS LuCI 写的（只有 `htdocs/.../view/*.js` + `menu.d`），在 Lua LuCI 上会 404。本项目用 `controller.lua` + `view/*.htm` + 一份独立 CSS 实现同等功能，并额外做了：
-
-- 卡片式设备列表（在线/离线/本机/DERP 徽章、等宽 IP 一键复制、逐台 `ping` 实测延迟）
-- 概览页（连接状态、本机 IP、子网路由、直连/中继统计、7 天流量曲线、服务启停）
-- 每台设备的「⋯」菜单（复制 SSH 命令、打开/复制 MagicDNS、复制 IP）
-- 亮色 / 暗色双配色
-- 可选：IPv6 自动获取（让旁路由通过 SLAAC 拿到上游公网 IPv6，Tailscale 才能走 IPv6 P2P）
-
-## 截图
+**给 Lua LuCI 的 Tailscale 卡片式管理界面** —— 设备在线状态一目了然、逐台 ping 实测延迟、7 天流量曲线、亮色/暗色双主题。
 
 | 设备列表（亮色） | 概览（暗色） |
 |---|---|
-| 见仓库 `docs/devices-light.png` | 见仓库 `docs/status-dark.png` |
+| ![设备列表](docs/devices-light.png) | ![概览](docs/status-dark.png) |
+
+> 更多截图见 [`docs/`](docs)：`devices-dark.png`、`status-light.png`。
+
+## 为什么还要一个
+
+官方 `tailscale` 包只带命令行；社区常见的 `luci-app-tailscale` 是给新版 ucode/JS LuCI 写的（只有 `htdocs/.../view/*.js` + `menu.d`），在 Lua LuCI 上直接 404。
+
+本项目用 `controller.lua` + `view/*.htm` + 一份独立 CSS 实现同等功能，并额外做了：
+
+- **卡片式设备列表** —— 在线/离线/本机/DERP 徽章，等宽字体 IP 一键复制，逐台 `ping` 实测延迟
+- **概览页** —— 连接状态、本机 IP、子网路由、直连/中继统计、7 天流量曲线、服务启停
+- **每台设备的「⋯」菜单** —— 复制 SSH 命令、打开/复制 MagicDNS 名、复制 IP
+- **亮色 / 暗色双配色**
+- **可选**：IPv6 自动获取（让旁路由通过 SLAAC 拿到上游公网 IPv6，Tailscale 才能走 IPv6 P2P）
 
 ## 依赖
 
@@ -26,7 +35,15 @@ luci-lib-jsonc     # 解析 tailscale status --json
 
 ## 安装
 
-### 方式一：手动拷贝（最快）
+### 方式零：一键脚本（在路由器上执行）
+
+```sh
+uclient-fetch -O- https://raw.githubusercontent.com/Breeze88-hub/luci-app-tailscale-card/main/install.sh | sh
+```
+
+脚本会先把缺的依赖装上，再把文件铺到对应目录并重启 `uhttpd`。它是幂等的，重复跑不会重复装包。
+
+### 方式一：手动拷贝
 
 ```sh
 # 在 OpenWrt 上
@@ -56,6 +73,14 @@ rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache
 cp -r luci-app-tailscale-card $OPENWRT/package/luci-app-tailscale-card
 make menuconfig     # LuCI → Applications → luci-app-tailscale-card
 make package/luci-app-tailscale-card/compile V=s
+```
+
+### 方式三：直接加 feed
+
+```sh
+echo "src-git tailscalecard https://github.com/Breeze88-hub/luci-app-tailscale-card.git" >> feeds.conf.default
+./scripts/feeds update tailscalecard
+./scripts/feeds install -a -p tailscalecard
 ```
 
 ## 首次配置
@@ -123,24 +148,44 @@ ifup lan
 
 拿到 `inet6 2408:.../64 scope global dynamic` 和 `default via fe80::x proto ra` 后，`tailscale netcheck` 的 `IPv6:` 会变成 `yes`，手机等 IPv6 设备即可走 IPv6 P2P。
 
-## 兼容性说明
+## 兼容性
 
-- 只在 **Lua LuCI**（`/usr/bin/lua` 版 `/www/cgi-bin/luci`）上验证过；ucode/JS LuCI 请用基于 client-side view 的实现。
-- 主题适配以 argon 1.8.4 为准；bootstrap/material 下布局正常，配色会跟随各自变量。
-- 页面隐藏了主题自带的二级 tab（与底部 tab 重复），并用 `#maincontent{padding-top:74px}` 给固定 header 让位；如果你的主题 header 高度不同，改这两个值即可。
+| 项目 | 状态 |
+|---|---|
+| LuCI | **Lua 版**（`/usr/bin/lua` 驱动的 `/www/cgi-bin/luci`）；ucode/JS LuCI 不适用，请用 client-side view 实现 |
+| OpenWrt | 21.02 / 22.03 / 23.05 / 24.10，需 `luci-compat` |
+| 防火墙 | fw3（iptables）已实测；fw4（nftables）请把 `fw_mode` 设为 `nftables` |
+| 主题 | argon 1.8.4 为准，bootstrap / material 布局正常、配色跟随各自变量 |
+
+页面隐藏了主题自带的二级 tab（与底部 tab 重复），并用 `#maincontent{padding-top:74px}` 给固定 header 让位；如果你的主题 header 高度不同，改这两个值即可。
+
+## 排错
+
+| 现象 | 原因 / 处理 |
+|---|---|
+| 菜单里没有 Tailscale | `luci-compat` 没装，或 `luci-indexcache` 未清 —— 删 `/tmp/luci-*cache*` 后重启 `uhttpd` |
+| 页面 404 但菜单在 | 文件放错目录。`controller.lua` 必须在 `/usr/lib/lua/luci/controller/`，视图在 `/usr/lib/lua/luci/view/tailscale/` |
+| 设备全部显示 `relay` | 见上面「让 P2P 直连生效」，UDP 41641 被代理劫持 |
+| 流量图空白 | `tailscale-traffic-sampler` 没加 cron，或不到 5 分钟还没采样点 |
+| 本机 IP 显示 `100.x` 但点复制无反应 | 非 HTTPS 环境下 `navigator.clipboard` 不可用，页面已回退到 `textarea` 方案；若仍失败请检查浏览器策略 |
 
 ## 文件
 
 ```
-luasrc/controller/tailscale.lua              菜单注册 + ping/traffic 接口 + 服务动作
-luasrc/view/tailscale/devices.htm            设备列表（卡片）
-luasrc/view/tailscale/status.htm             概览（统计 + 流量图 + 服务操作）
-luasrc/model/cbi/tailscale/setting.lua       设置表单
+luasrc/controller/tailscale.lua                菜单注册 + ping/traffic 接口 + 服务动作
+luasrc/view/tailscale/devices.htm              设备列表（卡片）
+luasrc/view/tailscale/status.htm               概览（统计 + 流量图 + 服务操作）
+luasrc/model/cbi/tailscale/setting.lua         设置表单
 htdocs/luci-static/resources/tailscale/ui.css  全部样式（含暗色）
-root/usr/bin/tailscale-traffic-sampler       流量采样
-root/etc/hotplug.d/iface/95-lan-ipv6-ra      IPv6 accept_ra 兜底
+root/usr/bin/tailscale-traffic-sampler         流量采样
+root/etc/hotplug.d/iface/95-lan-ipv6-ra        IPv6 accept_ra 兜底
+install.sh                                     一键安装
 ```
+
+## 更新日志
+
+见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## License
 
-MIT
+[MIT](LICENSE)

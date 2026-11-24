@@ -16,7 +16,8 @@ PKG_NAME:=luci-app-tailscale-card
 PKG_VERSION:=1.0.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
-PKG_MAINTAINER:=luci-app-tailscale-card contributors
+PKG_LICENSE_FILES:=LICENSE
+PKG_MAINTAINER:=Breeze88-hub <Breeze88-hub@users.noreply.github.com>
 
 include $(TOPDIR)/feeds/luci/luci.mk
 
